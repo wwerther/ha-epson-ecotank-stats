@@ -67,9 +67,21 @@ def _strip_urn_prefix(raw: str | None) -> str | None:
 
 
 def _txt_get(properties: dict[str, Any], key: str) -> str | None:
-    """Return a TXT property as a stripped string or ``None``."""
+    """Return a TXT property as a stripped string (case-insensitive lookup).
 
-    value = properties.get(key)
+    Different HA versions normalise zeroconf TXT keys differently (some
+    preserve the original case, others lowercase them). Doing a
+    case-insensitive lookup keeps the integration working across versions.
+    """
+
+    if not properties:
+        return None
+    needle = key.lower()
+    value: Any = None
+    for prop_key, prop_value in properties.items():
+        if str(prop_key).lower() == needle:
+            value = prop_value
+            break
     if value is None:
         return None
     if isinstance(value, bytes):
@@ -210,8 +222,19 @@ class EpsonEcoTankStatsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """
 
         properties = dict(discovery_info.properties or {})
-        manufacturer = _txt_get(properties, ZEROCONF_TXT_MFG) or ""
-        if not manufacturer.upper().startswith(EPSON_MFG_PREFIX):
+        manufacturer = (_txt_get(properties, ZEROCONF_TXT_MFG) or "").upper()
+        model = _txt_get(properties, ZEROCONF_TXT_MODEL) or ""
+        # Some firmwares omit ``usb_MFG`` but always include ``ty`` (the
+        # human-readable model). Treat either signal as proof of an Epson.
+        is_epson = manufacturer.startswith(EPSON_MFG_PREFIX) or model.upper().startswith(
+            EPSON_MFG_PREFIX
+        )
+        if not is_epson:
+            _LOGGER.debug(
+                "Ignoring non-Epson zeroconf discovery (mfg=%r, ty=%r)",
+                manufacturer,
+                model,
+            )
             return self.async_abort(reason="not_epson")
 
         host = discovery_info.host
@@ -240,7 +263,10 @@ class EpsonEcoTankStatsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         await self.async_set_unique_id(ipp_identifier)
         self._abort_if_unique_id_configured(updates={CONF_HOST: host})
 
-        model = _txt_get(properties, ZEROCONF_TXT_MODEL) or "Epson Printer"
+        # ``model`` may be empty when discovery happened via the manufacturer
+        # signal alone; reuse it later but fall back to a sensible default.
+        if not model:
+            model = "Epson Printer"
 
         # Quick reachability + identity check against the embedded web UI.
         try:

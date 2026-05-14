@@ -11,17 +11,7 @@
   "requirements": ["beautifulsoup4>=4.12"],
   "dependencies": [],
   "zeroconf": [
-    {
-      "type": "_ipp._tcp.local.",
-      "properties": {
-        "usb_MFG": "EPSON*"
-      }
-    },
-    {
-      "type": "_ipps._tcp.local.",
-      "properties": {
-        "usb_MFG": "EPSON*"
-      }
-    }
+    "_ipp._tcp.local.",
+    "_ipps._tcp.local."
   ]
 }
