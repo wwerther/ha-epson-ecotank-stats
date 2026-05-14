@@ -2,12 +2,26 @@
   "domain": "epson_ecotank_stats",
   "name": "Epson EcoTank Statistics",
   "version": "0.1.0",
-  "documentation": "https://github.com/wseifert/ha_epson_ecotank_stats",
-  "issue_tracker": "https://github.com/wseifert/ha_epson_ecotank_stats/issues",
-  "codeowners": ["@wseifert"],
+  "documentation": "https://github.com/wwerther/ha-epson-ecotank-stats",
+  "issue_tracker": "https://github.com/wwerther/ha-epson-ecotank-stats/issues",
+  "codeowners": ["@wwerther"],
   "config_flow": true,
   "integration_type": "device",
   "iot_class": "local_polling",
   "requirements": ["beautifulsoup4>=4.12"],
-  "dependencies": []
+  "dependencies": [],
+  "zeroconf": [
+    {
+      "type": "_ipp._tcp.local.",
+      "properties": {
+        "usb_MFG": "EPSON*"
+      }
+    },
+    {
+      "type": "_ipps._tcp.local.",
+      "properties": {
+        "usb_MFG": "EPSON*"
+      }
+    }
+  ]
 }

@@ -84,3 +84,28 @@ KEY_MODEL: Final = "model"
 
 # Ink colour codes (matching the Ink_*.PNG suffixes used by the printer).
 INK_COLORS: Final = ("K", "C", "M", "Y")
+
+# ---------------------------------------------------------------------------
+# IPP integration interop
+# ---------------------------------------------------------------------------
+# Domain string used by the Home Assistant core ``ipp`` integration. We reuse
+# its DeviceInfo identifier scheme ``("ipp", <printer-uuid>)`` so our sensors
+# show up on the same device entry instead of creating a duplicate.
+IPP_DOMAIN: Final = "ipp"
+
+# Stored in ``ConfigEntry.data``: the IPP printer UUID we detected (either via
+# zeroconf TXT records or by looking up the device registry). May be ``None``
+# if the printer was added manually and no matching IPP device was found.
+CONF_IPP_UUID: Final = "ipp_uuid"
+
+# Zeroconf TXT key names. ``UUID`` carries the printer's UUID (sometimes with
+# a ``urn:uuid:`` prefix), ``usb_MFG`` is the manufacturer string, ``ty`` is
+# the human-readable model, ``adminurl`` points at the embedded web UI.
+ZEROCONF_TXT_UUID: Final = "UUID"
+ZEROCONF_TXT_MFG: Final = "usb_MFG"
+ZEROCONF_TXT_MODEL: Final = "ty"
+ZEROCONF_TXT_ADMIN_URL: Final = "adminurl"
+
+# Manufacturer prefix we accept. Epson firmwares typically advertise
+# ``EPSON`` exactly, but we match case-insensitively with a startswith().
+EPSON_MFG_PREFIX: Final = "EPSON"
