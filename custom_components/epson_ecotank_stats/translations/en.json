@@ -1,0 +1,61 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Epson EcoTank Statistics",
+        "description": "Enter the printer's hostname or IP address. The integration will fetch the embedded web status pages and create page-counter and ink-level sensors.",
+        "data": {
+          "host": "Host or IP",
+          "name": "Name",
+          "scheme": "Scheme",
+          "port": "Port"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the printer status page. Verify host, scheme and port.",
+      "unknown": "Unexpected error while contacting the printer."
+    },
+    "abort": {
+      "already_configured": "This printer is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Polling options",
+        "description": "How often the printer should be polled. Counters change slowly, so larger intervals are friendlier to the device.",
+        "data": {
+          "scan_interval": "Scan interval (seconds)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "pages_total": { "name": "Total pages" },
+      "pages_bw": { "name": "Black & white pages" },
+      "pages_color": { "name": "Color pages" },
+      "pages_simplex": { "name": "Simplex pages" },
+      "pages_duplex": { "name": "Duplex pages" },
+      "function_bw_copy": { "name": "Pages copied (B/W)" },
+      "function_color_copy": { "name": "Pages copied (color)" },
+      "function_bw_fax": { "name": "Pages faxed (B/W)" },
+      "function_color_fax": { "name": "Pages faxed (color)" },
+      "function_bw_scan": { "name": "Pages scanned (B/W)" },
+      "function_color_scan": { "name": "Pages scanned (color)" },
+      "function_bw_print": { "name": "Pages printed from computer (B/W)" },
+      "function_color_print": { "name": "Pages printed from computer (color)" },
+      "function_bw_other": { "name": "Pages printed from other sources (B/W)" },
+      "function_color_other": { "name": "Pages printed from other sources (color)" },
+      "ink_k": { "name": "Ink level black" },
+      "ink_c": { "name": "Ink level cyan" },
+      "ink_m": { "name": "Ink level magenta" },
+      "ink_y": { "name": "Ink level yellow" },
+      "printer_status": { "name": "Printer status" },
+      "epson_connect_status": { "name": "Epson Connect status" },
+      "first_print_date": { "name": "First print date" },
+      "firmware": { "name": "Firmware version" }
+    }
+  }
+}

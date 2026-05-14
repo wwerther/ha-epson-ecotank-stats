@@ -1,0 +1,13 @@
+{
+  "domain": "epson_ecotank_stats",
+  "name": "Epson EcoTank Statistics",
+  "version": "0.1.0",
+  "documentation": "https://github.com/wseifert/ha_epson_ecotank_stats",
+  "issue_tracker": "https://github.com/wseifert/ha_epson_ecotank_stats/issues",
+  "codeowners": ["@wseifert"],
+  "config_flow": true,
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "requirements": ["beautifulsoup4>=4.12"],
+  "dependencies": []
+}
