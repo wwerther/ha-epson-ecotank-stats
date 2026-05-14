@@ -48,15 +48,22 @@ STEP_USER_SCHEMA = vol.Schema(
 )
 
 
-def _normalise_uuid(raw: str | None) -> str | None:
-    """Strip the ``urn:uuid:`` prefix some printers add to the TXT record."""
+def _strip_urn_prefix(raw: str | None) -> str | None:
+    """Return ``raw`` without an ``urn:uuid:`` prefix (case preserved).
+
+    Note: we deliberately do **not** lowercase the value. The Home Assistant
+    core IPP integration stores the UUID byte-for-byte as advertised by the
+    printer and uses it directly in its DeviceInfo identifier
+    ``("ipp", <uuid>)``. To merge with that device entry we must use the
+    exact same string.
+    """
 
     if not raw:
         return None
     value = raw.strip()
     if value.lower().startswith("urn:uuid:"):
         value = value[len("urn:uuid:") :]
-    return value.lower() or None
+    return value or None
 
 
 def _txt_get(properties: dict[str, Any], key: str) -> str | None:
@@ -74,12 +81,14 @@ def _txt_get(properties: dict[str, Any], key: str) -> str | None:
     return text or None
 
 
-def _lookup_ipp_uuid_by_host(hass: HomeAssistant, host: str) -> str | None:
-    """Find an existing IPP device-registry entry whose host matches ``host``.
+def _lookup_ipp_identifier_by_host(hass: HomeAssistant, host: str) -> str | None:
+    """Return the IPP device's identifier string for ``host`` or ``None``.
 
-    The IPP integration creates a device with identifier ``("ipp", <uuid>)``
-    and stores the host as part of ``configuration_url``
-    (e.g. ``http://1.2.3.4:631``). We try that first.
+    The Home Assistant core ``ipp`` integration creates a device with
+    identifier ``("ipp", <printer-uuid>)`` and stores the host in
+    ``configuration_url`` (e.g. ``http://1.2.3.4:631``). We return the
+    identifier **verbatim** so our DeviceInfo can reuse it byte-for-byte
+    – any normalisation here would prevent HA from merging both devices.
     """
 
     registry = dr.async_get(hass)
@@ -94,6 +103,12 @@ def _lookup_ipp_uuid_by_host(hass: HomeAssistant, host: str) -> str | None:
             continue
         config_url = (device.configuration_url or "").lower()
         if needle and needle in config_url:
+            _LOGGER.debug(
+                "Matched existing IPP device %s for host %s, identifier=%r",
+                device.id,
+                host,
+                ipp_id,
+            )
             return ipp_id
     return None
 
@@ -148,10 +163,11 @@ class EpsonEcoTankStatsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 # Best effort: locate an existing IPP device for this host so
                 # we attach to the same device-registry entry. The IPP
-                # integration's identifier is ``("ipp", <printer-uuid>)``.
-                ipp_uuid = _lookup_ipp_uuid_by_host(self.hass, host)
+                # integration's identifier is ``("ipp", <printer-uuid>)`` and
+                # must be used verbatim for HA to merge both devices.
+                ipp_uuid = _lookup_ipp_identifier_by_host(self.hass, host)
 
-                # Use the IPP UUID as our unique_id when available so HA
+                # Use the IPP identifier as our unique_id when available so HA
                 # transparently merges entries created via zeroconf and
                 # manually. Otherwise fall back to the printer serial or host.
                 unique_id = (
@@ -198,14 +214,30 @@ class EpsonEcoTankStatsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if not manufacturer.upper().startswith(EPSON_MFG_PREFIX):
             return self.async_abort(reason="not_epson")
 
-        uuid = _normalise_uuid(_txt_get(properties, ZEROCONF_TXT_UUID))
-        if uuid is None:
-            # Without a stable UUID we cannot safely attach to the IPP device
-            # entry, so we skip the auto-flow and let the user add it manually.
+        host = discovery_info.host
+
+        # Prefer the identifier of an already-registered IPP device for this
+        # host so we lock onto the exact same device-registry entry. Falling
+        # back to the zeroconf TXT UUID (urn-prefix stripped, case preserved)
+        # only when no IPP integration is set up yet.
+        registry_id = _lookup_ipp_identifier_by_host(self.hass, host)
+        txt_uuid = _strip_urn_prefix(_txt_get(properties, ZEROCONF_TXT_UUID))
+        ipp_identifier = registry_id or txt_uuid
+
+        if ipp_identifier is None:
+            # Without a stable identifier we cannot safely attach to the IPP
+            # device, so we skip the auto-flow and let the user add it manually.
             return self.async_abort(reason="no_uuid")
 
-        await self.async_set_unique_id(uuid)
-        host = discovery_info.host
+        _LOGGER.debug(
+            "Zeroconf Epson printer at %s: registry_id=%r, txt_uuid=%r, using=%r",
+            host,
+            registry_id,
+            txt_uuid,
+            ipp_identifier,
+        )
+
+        await self.async_set_unique_id(ipp_identifier)
         self._abort_if_unique_id_configured(updates={CONF_HOST: host})
 
         model = _txt_get(properties, ZEROCONF_TXT_MODEL) or "Epson Printer"
@@ -229,7 +261,7 @@ class EpsonEcoTankStatsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_NAME: title,
             CONF_SCHEME: DEFAULT_SCHEME,
             CONF_PORT: DEFAULT_PORT,
-            CONF_IPP_UUID: uuid,
+            CONF_IPP_UUID: ipp_identifier,
         }
         self.context["title_placeholders"] = {"name": title, "host": host}
         return await self.async_step_zeroconf_confirm()
