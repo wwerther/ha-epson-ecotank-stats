@@ -5,7 +5,7 @@ implementation state of the repo.
 
 ## Status quo (Stand: Mai 2026)
 
-P0 ist abgeschlossen. Die Integration ist als Config-Entry-basierter HACS-Component lauffähig (Setup über UI, Polling via `DataUpdateCoordinator`, Sensoren über `SensorEntityDescription`). Parser ist gegen die Fixtures unter `docs/` durch eine Pytest-Suite abgesichert (`.venv/bin/python -m pytest tests/` – 8 Tests grün).
+P0 + P1-Discovery/Device-Link sind abgeschlossen. Die Integration ist als Config-Entry-basierter HACS-Component lauffähig (Setup über UI **oder** automatisch per Zeroconf für IPP-Drucker mit `usb_MFG=EPSON*`), Polling via `DataUpdateCoordinator`, Sensoren über `SensorEntityDescription`. Parser ist gegen die Fixtures unter `docs/` durch eine Pytest-Suite abgesichert (`.venv/bin/python -m pytest tests/` – 8 Tests grün).
 
 Aktueller Code unter `custom_components/epson_ecotank_stats/`:
 - `manifest.json` mit korrekter Domain, `config_flow`, `integration_type="device"`, `iot_class="local_polling"`, BS4 als Requirement.
@@ -14,7 +14,7 @@ Aktueller Code unter `custom_components/epson_ecotank_stats/`:
 - `coordinator.py` – fetched beide Seiten parallel, setzt UI-Sprache einmalig auf Englisch (`SEL_LANGA=1`) als Best-Effort.
 - `config_flow.py` – User-Step (Host/Name/Scheme/Port) mit Live-Validierung; OptionsFlow für Scan-Intervall (Min. 60 s); Unique-ID = Drucker-Serial (Fallback Host).
 - `__init__.py` – `async_setup_entry`/`async_unload_entry`, Sensor-Plattform, Reload-Listener bei Options-Änderung.
-- `sensor.py` – Totals, Funktionssensoren (default disabled), Tinten K/C/M/Y, Status, Epson-Connect, First-Print-Date, Firmware. Verbindet sich per `DeviceInfo.identifiers={("ipp", serial), (DOMAIN, ...)}` mit dem IPP-Gerät.
+- `sensor.py` – Totals, Funktionssensoren (default disabled), Tinten K/C/M/Y, Status, Epson-Connect, First-Print-Date, Firmware. Verbindet sich per `DeviceInfo.identifiers={("ipp", <printer-uuid>)}` mit dem bestehenden IPP-Device-Registry-Eintrag, sodass HA beide Integrationen automatisch zu **einem** Gerät zusammenführt.
 - `translations/en.json`.
 - `tests/test_parser.py` – Fixture-basierte Tests, hierfür reicht `pytest + beautifulsoup4` (kein HA notwendig).
 
@@ -41,17 +41,20 @@ Aktueller Code unter `custom_components/epson_ecotank_stats/`:
 - [x] `sensor.py` als `SensorEntityDescription`-getriebene Generic-Entity.
 - [x] Verwaistes `@property device_info` aus dem alten Stub entfernt.
 
-## P1 – Geräteverknüpfung mit IPP
+## P1 – Geräteverknüpfung mit IPP ✅
 
-- [ ] `DeviceInfo.identifiers` so wählen, dass dieselbe Device-Registry-Zeile wie die Core-`ipp`-Integration getroffen wird (`("ipp", <printer-uuid>)`).
-- [ ] Printer-UUID/Serial entweder aus IPP-Discovery (zeroconf-Schritt) oder aus der Wartungsseite extrahieren.
-- [ ] Fallback-Identifier `(DOMAIN, host)` falls keine UUID bekannt ist; `via_device` setzen, wenn möglich.
+- [x] `DeviceInfo.identifiers = {("ipp", <printer-uuid>)}` sobald eine UUID bekannt ist – HA merged das Gerät automatisch mit dem Core-`ipp`-Eintrag.
+- [x] Printer-UUID aus dem Zeroconf-TXT-Record (`UUID`, optional mit `urn:uuid:`-Prefix, wird normalisiert) gewonnen und in `entry.data["ipp_uuid"]` persistiert.
+- [x] Manueller Setup-Pfad: Suche im Device-Registry nach einem bestehenden IPP-Device am gleichen Host (`configuration_url`-Match) und übernehme dessen UUID.
+- [x] Fallback-Identifier `(DOMAIN, <serial-or-host>)` falls weder Zeroconf noch Registry-Lookup eine UUID liefern.
 
 ## P1 – Discovery & UX
 
-- [ ] `async_step_zeroconf` für `_ipp._tcp.local.`; Vorschlag aus dem Discovery-Payload (Host, Name, UUID).
-- [ ] Options-Flow: `scan_interval`, Scheme/Port, ggf. UI-Sprache.
-- [ ] HACS-Metadaten: `README.md` mit Screenshots/Erklärung, `info.md` für die HACS-Detailansicht, `hacs.json` ggf. ergänzen (`country`, `homeassistant`-Min-Version stimmt schon: 2024.11.0).
+- [x] `async_step_zeroconf` für `_ipp._tcp.local.` und `_ipps._tcp.local.`, gefiltert auf `usb_MFG=EPSON*` im Manifest. Confirm-Step zeigt Modell + Host und legt den Eintrag mit `unique_id = <printer-uuid>` an.
+- [x] OptionsFlow für `scan_interval` (bereits in P0 angelegt).
+- [ ] OptionsFlow erweitern: Scheme/Port, ggf. UI-Sprache.
+- [ ] HACS-Metadaten: `README.md` mit Screenshots/Erklärung, `info.md` für die HACS-Detailansicht, `hacs.json` ggf. ergänzen (`country`).
+- [ ] Echte GitHub-URL in `manifest.json` (`documentation`/`issue_tracker`/`codeowners`) statt Platzhalter `wseifert`.
 
 ## P2 – Diagnose & Robustheit
 
@@ -69,3 +72,4 @@ Aktueller Code unter `custom_components/epson_ecotank_stats/`:
 ## Done
 
 - P0 komplett (Bootstrap, Parser inkl. Tests, Coordinator, Sensoren, i18n).
+- P1 Discovery + Device-Link: Zeroconf-Auto-Discovery für Epson-IPP-Drucker, IPP-UUID-basierte DeviceInfo-Identifier zur Auto-Merge mit der Core-`ipp`-Integration, Registry-Lookup beim manuellen Setup, Translations für den Zeroconf-Confirm-Step.

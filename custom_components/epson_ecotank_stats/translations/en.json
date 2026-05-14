@@ -1,5 +1,6 @@
 {
   "config": {
+    "flow_title": "{name} ({host})",
     "step": {
       "user": {
         "title": "Epson EcoTank Statistics",
@@ -10,6 +11,10 @@
           "scheme": "Scheme",
           "port": "Port"
         }
+      },
+      "zeroconf_confirm": {
+        "title": "Epson printer discovered",
+        "description": "Add the discovered Epson printer **{name}** at `{host}`? Page-counter and ink-level sensors will be attached to the existing IPP printer device."
       }
     },
     "error": {
@@ -17,7 +22,10 @@
       "unknown": "Unexpected error while contacting the printer."
     },
     "abort": {
-      "already_configured": "This printer is already configured."
+      "already_configured": "This printer is already configured.",
+      "not_epson": "Discovered printer is not an Epson model.",
+      "no_uuid": "Discovered printer did not advertise a UUID; please add it manually.",
+      "cannot_connect": "Discovered printer's web UI is unreachable on http/80."
     }
   },
   "options": {

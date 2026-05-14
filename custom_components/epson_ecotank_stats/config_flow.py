@@ -8,21 +8,29 @@ from typing import Any
 import aiohttp
 import voluptuous as vol
 from homeassistant import config_entries
+from homeassistant.components import zeroconf
 from homeassistant.const import CONF_HOST, CONF_NAME, CONF_PORT
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
+    CONF_IPP_UUID,
     CONF_SCAN_INTERVAL,
     CONF_SCHEME,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SCHEME,
     DOMAIN,
+    EPSON_MFG_PREFIX,
     HTTP_TIMEOUT_SECONDS,
+    IPP_DOMAIN,
     MIN_SCAN_INTERVAL_SECONDS,
     PATH_PRODUCT_STATUS,
+    ZEROCONF_TXT_MFG,
+    ZEROCONF_TXT_MODEL,
+    ZEROCONF_TXT_UUID,
 )
 from .parser import parse_product_status
 
@@ -40,8 +48,58 @@ STEP_USER_SCHEMA = vol.Schema(
 )
 
 
+def _normalise_uuid(raw: str | None) -> str | None:
+    """Strip the ``urn:uuid:`` prefix some printers add to the TXT record."""
+
+    if not raw:
+        return None
+    value = raw.strip()
+    if value.lower().startswith("urn:uuid:"):
+        value = value[len("urn:uuid:") :]
+    return value.lower() or None
+
+
+def _txt_get(properties: dict[str, Any], key: str) -> str | None:
+    """Return a TXT property as a stripped string or ``None``."""
+
+    value = properties.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        try:
+            value = value.decode("utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            return None
+    text = str(value).strip()
+    return text or None
+
+
+def _lookup_ipp_uuid_by_host(hass: HomeAssistant, host: str) -> str | None:
+    """Find an existing IPP device-registry entry whose host matches ``host``.
+
+    The IPP integration creates a device with identifier ``("ipp", <uuid>)``
+    and stores the host as part of ``configuration_url``
+    (e.g. ``http://1.2.3.4:631``). We try that first.
+    """
+
+    registry = dr.async_get(hass)
+    needle = host.lower()
+    for device in registry.devices.values():
+        ipp_id: str | None = None
+        for domain, identifier in device.identifiers:
+            if domain == IPP_DOMAIN:
+                ipp_id = identifier
+                break
+        if ipp_id is None:
+            continue
+        config_url = (device.configuration_url or "").lower()
+        if needle and needle in config_url:
+            return ipp_id
+    return None
+
+
 async def _validate_host(
-    hass, host: str, scheme: str, port: int
+    hass: HomeAssistant, host: str, scheme: str, port: int
 ) -> dict[str, Any]:
     """Fetch the product-status page and return identity info on success."""
 
@@ -61,6 +119,13 @@ class EpsonEcoTankStatsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
+    def __init__(self) -> None:
+        self._discovered: dict[str, Any] = {}
+
+    # ------------------------------------------------------------------
+    # Manual / user-initiated flow
+    # ------------------------------------------------------------------
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
@@ -77,15 +142,26 @@ class EpsonEcoTankStatsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except (aiohttp.ClientError, TimeoutError, OSError) as err:
                 _LOGGER.debug("Connection error to printer: %s", err)
                 errors["base"] = "cannot_connect"
-            except Exception:  # noqa: BLE001 - surface as generic error
+            except Exception:  # noqa: BLE001
                 _LOGGER.exception("Unexpected error validating Epson printer")
                 errors["base"] = "unknown"
             else:
-                # Use the printer serial as unique id when present so adding
-                # the same device twice (different IPs) is rejected.
-                unique_id = identity.get("serial") or host.lower()
+                # Best effort: locate an existing IPP device for this host so
+                # we attach to the same device-registry entry. The IPP
+                # integration's identifier is ``("ipp", <printer-uuid>)``.
+                ipp_uuid = _lookup_ipp_uuid_by_host(self.hass, host)
+
+                # Use the IPP UUID as our unique_id when available so HA
+                # transparently merges entries created via zeroconf and
+                # manually. Otherwise fall back to the printer serial or host.
+                unique_id = (
+                    ipp_uuid
+                    or identity.get("serial")
+                    or host.lower()
+                )
                 await self.async_set_unique_id(unique_id)
                 self._abort_if_unique_id_configured(updates={CONF_HOST: host})
+
                 title = user_input.get(CONF_NAME) or identity.get("model") or host
                 return self.async_create_entry(
                     title=title,
@@ -94,6 +170,7 @@ class EpsonEcoTankStatsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_NAME: title,
                         CONF_SCHEME: scheme,
                         CONF_PORT: port,
+                        CONF_IPP_UUID: ipp_uuid,
                     },
                 )
 
@@ -102,6 +179,83 @@ class EpsonEcoTankStatsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=STEP_USER_SCHEMA,
             errors=errors,
         )
+
+    # ------------------------------------------------------------------
+    # Zeroconf discovery (auto-kicks-in for IPP-discovered Epson printers)
+    # ------------------------------------------------------------------
+
+    async def async_step_zeroconf(
+        self, discovery_info: zeroconf.ZeroconfServiceInfo
+    ) -> FlowResult:
+        """Handle a printer announced via ``_ipp[s]._tcp.local.``.
+
+        The matcher in ``manifest.json`` already restricts this to Epson
+        manufacturers; we re-check defensively in case the matcher is loose.
+        """
+
+        properties = dict(discovery_info.properties or {})
+        manufacturer = _txt_get(properties, ZEROCONF_TXT_MFG) or ""
+        if not manufacturer.upper().startswith(EPSON_MFG_PREFIX):
+            return self.async_abort(reason="not_epson")
+
+        uuid = _normalise_uuid(_txt_get(properties, ZEROCONF_TXT_UUID))
+        if uuid is None:
+            # Without a stable UUID we cannot safely attach to the IPP device
+            # entry, so we skip the auto-flow and let the user add it manually.
+            return self.async_abort(reason="no_uuid")
+
+        await self.async_set_unique_id(uuid)
+        host = discovery_info.host
+        self._abort_if_unique_id_configured(updates={CONF_HOST: host})
+
+        model = _txt_get(properties, ZEROCONF_TXT_MODEL) or "Epson Printer"
+
+        # Quick reachability + identity check against the embedded web UI.
+        try:
+            identity = await _validate_host(
+                self.hass, host, DEFAULT_SCHEME, DEFAULT_PORT
+            )
+        except (aiohttp.ClientError, TimeoutError, OSError):
+            # Web UI unreachable on http/80 – the IPP service itself may live
+            # on a different host or port. Don't pollute the discovery list.
+            return self.async_abort(reason="cannot_connect")
+
+        # Prefer the model name from the printer's web UI title; fall back to
+        # the zeroconf TXT ``ty`` field.
+        title = identity.get("model") or model
+
+        self._discovered = {
+            CONF_HOST: host,
+            CONF_NAME: title,
+            CONF_SCHEME: DEFAULT_SCHEME,
+            CONF_PORT: DEFAULT_PORT,
+            CONF_IPP_UUID: uuid,
+        }
+        self.context["title_placeholders"] = {"name": title, "host": host}
+        return await self.async_step_zeroconf_confirm()
+
+    async def async_step_zeroconf_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Confirm adding a discovered Epson printer."""
+
+        if user_input is not None:
+            return self.async_create_entry(
+                title=self._discovered[CONF_NAME],
+                data=self._discovered,
+            )
+
+        return self.async_show_form(
+            step_id="zeroconf_confirm",
+            description_placeholders={
+                "name": self._discovered.get(CONF_NAME, ""),
+                "host": self._discovered.get(CONF_HOST, ""),
+            },
+        )
+
+    # ------------------------------------------------------------------
+    # Options flow
+    # ------------------------------------------------------------------
 
     @staticmethod
     @callback

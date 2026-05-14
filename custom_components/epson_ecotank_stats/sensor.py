@@ -20,11 +20,13 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    CONF_IPP_UUID,
     DATA_MAINTENANCE,
     DATA_PRODUCT,
     DOMAIN,
     FUNCTION_KEYS,
     INK_COLORS,
+    IPP_DOMAIN,
     KEY_EPSON_CONNECT_STATUS,
     KEY_FIRMWARE,
     KEY_FIRST_PRINT_DATE,
@@ -197,6 +199,9 @@ class EpsonStatsSensor(CoordinatorEntity[EpsonStatsCoordinator], SensorEntity):
     @property
     def _device_unique_id(self) -> str:
         product = self.coordinator.data.get(DATA_PRODUCT, {}) if self.coordinator.data else {}
+        ipp_uuid = self.coordinator.entry.data.get(CONF_IPP_UUID)
+        if ipp_uuid:
+            return ipp_uuid
         serial = product.get(KEY_SERIAL)
         if serial:
             return serial
@@ -206,12 +211,24 @@ class EpsonStatsSensor(CoordinatorEntity[EpsonStatsCoordinator], SensorEntity):
     def device_info(self) -> DeviceInfo:
         product = self.coordinator.data.get(DATA_PRODUCT, {}) if self.coordinator.data else {}
         serial = product.get(KEY_SERIAL)
-        # Prefer linking to the IPP device-registry entry by reusing its
-        # identifier scheme ``("ipp", <serial>)``. Fall back to our own
-        # identifier when the printer did not expose a serial.
-        identifiers: set[tuple[str, str]] = {(DOMAIN, self._device_unique_id)}
-        if serial:
-            identifiers.add(("ipp", serial))
+        ipp_uuid = self.coordinator.entry.data.get(CONF_IPP_UUID)
+
+        # Reuse the Home Assistant core IPP integration's identifier scheme
+        # ``("ipp", <printer-uuid>)``. When both integrations register the
+        # same identifier, HA merges them into a single device-registry
+        # entry, which is exactly what users want: one printer, both sets of
+        # entities. We only fall back to our own identifier when no IPP UUID
+        # could be discovered for this entry.
+        identifiers: set[tuple[str, str]]
+        if ipp_uuid:
+            identifiers = {(IPP_DOMAIN, ipp_uuid)}
+        else:
+            identifiers = {(DOMAIN, self._device_unique_id)}
+
+        connections: set[tuple[str, str]] = set()
+        if product.get(KEY_MAC_ADDRESS):
+            connections.add(("mac", product[KEY_MAC_ADDRESS]))
+
         return DeviceInfo(
             identifiers=identifiers,
             manufacturer=MANUFACTURER,
@@ -221,11 +238,7 @@ class EpsonStatsSensor(CoordinatorEntity[EpsonStatsCoordinator], SensorEntity):
             or self.coordinator.entry.data[CONF_HOST],
             sw_version=product.get(KEY_FIRMWARE),
             serial_number=serial,
-            connections=(
-                {("mac", product[KEY_MAC_ADDRESS])}
-                if product.get(KEY_MAC_ADDRESS)
-                else set()
-            ),
+            connections=connections,
             configuration_url=f"{self.coordinator.base_url}/",
         )
 
